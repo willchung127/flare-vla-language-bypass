@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What Does π0 Actually Do With Your Instruction?</title>
+<style>
+  :root {
+    --text: #1a1a1a; --muted: #666; --accent: #2d6a9f; --warn: #c23b22;
+    --ok: #2e7d4f; --bg-box: #f6f8fa; --border: #e1e4e8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: var(--text); margin: 0; line-height: 1.62; font-size: 17px;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 780px; margin: 0 auto; padding: 2.5rem 1.25rem 5rem; }
+  h1 { font-size: 2.1rem; line-height: 1.2; margin-bottom: .4rem; letter-spacing: -.02em; }
+  h2 { font-size: 1.45rem; margin-top: 2.8rem; letter-spacing: -.01em;
+       border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
+  h3 { font-size: 1.12rem; margin-top: 1.8rem; }
+  .subtitle { font-size: 1.15rem; color: var(--muted); margin-top: 0; }
+  .byline { color: var(--muted); font-size: .95rem; margin: 1rem 0 0; }
+  .byline a { color: var(--accent); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  figure { margin: 1.8rem 0; }
+  figure img, figure video { width: 100%; border: 1px solid var(--border); border-radius: 6px; }
+  figcaption { font-size: .88rem; color: var(--muted); margin-top: .5rem; line-height: 1.5; }
+  .tldr { background: var(--bg-box); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+          border-radius: 6px; padding: 1rem 1.3rem; margin: 1.8rem 0; }
+  .tldr ul { margin: .4rem 0 0; padding-left: 1.2rem; }
+  .tldr li { margin: .35rem 0; }
+  .warnbox { background: #fff8f6; border: 1px solid #f0d0c8; border-left: 4px solid var(--warn);
+             border-radius: 6px; padding: .8rem 1.2rem; margin: 1.5rem 0; font-size: .95rem; }
+  .demo-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1.8rem 0; }
+  .demo-pair figure { margin: 0; }
+  .demo-pair .vh { font-weight: 600; font-size: .95rem; margin-bottom: .4rem; }
+  .demo-tri { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .8rem; margin: 1.8rem 0; }
+  .demo-tri figure { margin: 0; }
+  .demo-tri .vh { font-weight: 600; font-size: .85rem; margin-bottom: .35rem; }
+  .ok { color: var(--ok); } .bad { color: var(--warn); }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; margin: 1.4rem 0; }
+  th, td { border: 1px solid var(--border); padding: .45rem .65rem; text-align: left; }
+  th { background: var(--bg-box); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  code { background: var(--bg-box); padding: .12em .35em; border-radius: 4px;
+         font-size: .85em; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  mark.todo { background: #fff3a3; padding: .1em .35em; border-radius: 3px; font-size: .85em;
+              font-weight: 600; }
+  .refs { font-size: .88rem; } .refs li { margin: .35rem 0; }
+  .footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--border);
+            color: var(--muted); font-size: .88rem; }
+  blockquote { border-left: 3px solid var(--border); margin: 1.2rem 0; padding: .2rem 1.2rem;
+               color: var(--muted); }
+  @media (max-width: 640px) { .demo-pair, .demo-tri { grid-template-columns: 1fr; } body { font-size: 16px; } }
+</style>
+</head>
+<body>
+<main>
+
+<!-- ================================================================ HEADER -->
+<h1>What Does π<sub>0</sub> Actually Do With Your Instruction?</h1>
+<p class="subtitle">A close look at how a fine-tuned vision-language-action model uses language on LIBERO</p>
+<p class="byline">
+  William Chung · UC Irvine · CS 295 · June 2026<br>
+</p>
+
+<div class="tldr">
+<strong>Summary of findings.</strong>
+<ul>
+  <li>π<sub>0</sub> does depend on its language instruction. Deleting it can drop success from 94–98% to as low as 0%. But the instruction works as a task label that picks which trained routine to run.</li>
+  <li>Instructions that ask for a change inside a routine are ignored. Changing the instruction from moving only one object instead of the original two objects results in failure. Avoiding an object works 0% of the time. The robot replays its training trajectory instead.</li>
+  <li>The object named by the prompt is readable inside the network at every layer (probe AUC 0.89–0.96), yet the policy never acts on it. The meaning of negation never forms anywhere in the network.</li>
+  <li>Three inference-time fixes fail. Sampler noise, forced attention, and hidden-state steering each verifiably do their job without changing the behavior. Behavior starts to move only when we add counterfactual training data through LoRA, which points the repair at the fine-tuning data.</li>
+</ul>
+</div>
+
+<!-- ================================================================ HERO DEMO -->
+<div class="demo-pair">
+  <figure>
+    <div class="vh ok">✓ It knows what task to do if finetuned on the task</div>
+    <video src="assets/videos/follows_crosstask_E1.mp4" autoplay loop muted playsinline controls></video>
+    <figcaption>Same scene, but we give the instruction from a <em>different</em> task it had been finetuned on. π<sub>0</sub> switches to the instructed task and completes it. At the level of choosing a task, the instruction it has seen before clearly steers behavior.</figcaption>
+  </figure>
+  <figure>
+    <div class="vh bad">✗ It misses the actual instructions details inside the task</div>
+    <video src="assets/videos/ignores_single_target_B1.mp4" autoplay loop muted playsinline controls></video>
+    <figcaption>Here the prompt asks the model to move <em>only one</em> of the two objects ("put the tomato sauce in the basket"). π<sub>0</sub> runs the full memorized two-object routine anyway, picking up the alphabet soup we never asked for.</figcaption>
+  </figure>
+</div>
+
+<div class="tldr" style="border-left-color: var(--ok);">
+<strong>What is new here, in one paragraph.</strong>
+Existing benchmarks (LIBERO-Plus, LIBERO-Pro) established that perturbions to the libero benchmark can severely limit the performance of VLA models, and more specifically, perturbing the language instruction doesn't really change a fine-tuned VLA's behavior from the original fine-tuned behavior. This project tries to establish <em>how the instruction is actually used, where the failure lives inside the network, and whether it can be repaired without retraining</em>. We contribute (1) evidence that the instruction acts as a wording-specific task label, using prompt conditions we have not seen tested before (keyword stripping, noun synonyms, hiding the instruction in filler text), (2) a leakage-controlled linear probe showing the named object is readable at every layer of the action expert yet never acted on, while negation is never resolved at any depth, and (3) and a test-time intervention study on a flow-matching VLA, in which sampler noise, attention redirection, and placebo-controlled steering all fail, and behavior begins to move only when LoRA adapters bring in counterfactual training data. The results show that the missing behavior was never learned, so training-free grounding fixes should be expected to plateau, and the repair belongs in the fine-tuning data and objective.
+</div>
+
+<!-- ================================================================ 1 -->
+<h2>1 · Why we did this</h2>
+<p>
+Vision-language-action models (VLAs) like π<sub>0</sub> <a href="#ref-pi0">[1]</a> combine a vision-language backbone (PaliGemma) with an "action expert" that generates robot actions, and they reach about 95% success on the LIBERO benchmark after fine-tuning. Two recent robustness benchmarks, LIBERO-Plus <a href="#ref-plus">[2]</a> and LIBERO-Pro <a href="#ref-pro">[3]</a>, reported something surprising. Instruction perturbations hurt these models far less than physical or visual shifts (for π<sub>0</sub> on LIBERO-Plus, language perturbations cost ~33 points while camera and robot-pose shifts cost ~78–88), and simple paraphrasing costs almost nothing. A common takeaway from those papers is that VLAs basically do not use language.
+</p>
+<p>
+We wanted to test that takeaway directly, because "does the model use language?" is really several different questions. Our project works through four of them in order. <strong>What exactly fails?</strong> (behavior) <strong>Where in the network does it fail?</strong> (mechanism) <strong>Is the language information even present inside the model?</strong> (probing) <strong>Can we fix it without retraining?</strong> (intervention). Most existing work stops at the first question. The contributions of this project are mainly in the last three.
+</p>
+
+<!-- ================================================================ 2 -->
+<h2>2 · Setup, and how "success" is measured</h2>
+<p>
+We use the LIBERO task suites (Spatial, Goal, and a two-object kitchen task from LIBERO-90 for the fine-grained experiments). Rollouts replan every 5 steps, matching the official openpi evaluation loop.
+</p>
+<div class="warnbox">
+The standard LIBERO success signal can be earned by <em>trajectory replay</em>. If the model ignores your prompt and simply reproduces its training trajectory, the goal checker can still mark the episode as a success. This inflated several of our early numbers. The clearest example involves prompts like "put the tomato sauce in the basket, <em>not</em> the alphabet soup". The lenient metric reported <strong>89%</strong> success, while in the videos the robot picks up the forbidden alphabet soup first in nearly every episode. All compliance numbers in this post therefore use a <strong>strict</strong> metric. The instructed goal must be achieved and the excluded object must stay untouched. Under the strict metric, that same negation condition scores 0%. We think this measurement gap is a useful finding on its own.
+</div>
+
+<!-- ================================================================ 3 -->
+<h2>3 · Finding 1 — The instruction works like a task label</h2>
+<p>
+Our first set of experiments manipulates the prompt during full rollouts (10 tasks × 5 trials per condition per suite). We also ran a forward-pass test that measures how much the predicted action chunk changes when only the prompt changes, normalized by the model's own sampling noise (how much the output changes when you simply re-sample with the same prompt).
+</p>
+<figure>
+  <img src="assets/figures/fig1_task_label.png" alt="Task label results">
+  <figcaption><strong>Figure 1.</strong> <em>Left:</em> success under prompt manipulations. The instruction survives paraphrasing (0.95), word scrambling (0.84), and stripping down to keywords (0.92). It fails when we delete it (0.00 / 0.24), replace it with another task's instruction (0.00, scored against the scene's own task), or hide it inside a longer sentence of filler text (0.08 / 0.16). <em>Right:</em> swapping the prompt moves the fine-tuned model's actions 4.0× more than sampling noise does (deleting it: 3.2×), so the prompt genuinely affects the output. The base model shows almost no prompt sensitivity (1.3×) on top of a ~4× larger noise floor.</figcaption>
+</figure>
+<p>Putting the conditions together, the way π<sub>0</sub> reads its instruction has three properties:</p>
+<table>
+<tr><th>Property</th><th>Evidence</th><th>What it suggests</th></tr>
+<tr><td><strong>The instruction is necessary</strong></td><td>empty prompt scores 0.00 (Goal) and 0.24 (Spatial), and with a swapped prompt the model never performs the scene's own task</td><td>π<sub>0</sub> is using language as a task label. Swapping the prompt to a different task's instruction that it had been finetuned on in the same environment leads it to perform the new swapped task, not the original task.</td></tr>
+<tr><td><strong>Word order is irrelevant</strong></td><td>scrambled words 0.84, content words only 0.92, paraphrase 0.95</td><td>the model is matching a set of familiar words and does not appear to parse the sentence</td></tr>
+<tr><td><strong>The match is tied to exact wording</strong></td><td>noun synonyms drop Goal to 0.70 (two tasks fall to 0/5), and hiding the instruction inside filler text drops success to <strong>0.08 / 0.16</strong></td><td>the model recognizes the specific words and prompt format it saw during training, which looks like memorized matching instead of reading</td></tr>
+</table>
+<figure>
+  <video src="assets/videos/swap_instruction.mp4" autoplay loop muted playsinline controls style="max-width:440px;display:block;margin:0 auto;"></video>
+  <figcaption><strong>Demo.</strong> The "swapped" condition from Figure 1 is an experiment where we replace the original prompt with a different prommpt it has seen and trained on before. The purpose of this experiment is to clarify that the prompt has some relation to the action taken and isn't purely visual. In this demonstration, the robot originally wants to open the drawer but is given the instruction to pick up the bowl, and the original task never gets performed (0.00 across all swap episodes). The instruction prompt decides what actions to take in thise case.</figcaption>
+</figure>
+<p>
+This also explains the LIBERO-Plus/Pro observation, including its mixed middle ground. Instruction perturbations that keep the familiar task words intact (paraphrases) hurt the performance only a little, because the model can still recognize which task is being asked for. Perturbations that bury or displace those words cost a lot. We also show from the above demo that the VLA isn't purely disregarding the language instructions and does not rely purely on vision alone. There are different instruction prompts that illicit different actions as long as it exists in the training data. This contradicts the interepretation that VLAs "ignore" language, but rather uses the prompt more of a label, rather than understanding the actual language. The π<sub>0</sub> does listen and the real question is how much detail is in the prompt itself.
+</p>
+
+<!-- ================================================================ 4 -->
+<h2>4 · Finding 2 — Inside a task, the words stop mattering</h2>
+<p>
+The harder test is whether the instruction can change what happens <em>within</em> a task. We picked a two-object LIBERO task (training behavior is to put an alphabet-soup box and a tomato-sauce can into a basket) and wrote 20 prompt variants in five categories. Reorderings (A), single-object requests (B), explicit ordering (C), negation (D), and cross-task prompts (E). We ran 15 seeds per prompt (300 episodes) and scored everything with the strict metric.
+</p>
+<figure>
+  <img src="assets/figures/fig2_strict_compliance.png" alt="Strict compliance headline">
+  <figcaption><strong>Figure 2.</strong> The two categories that require actually reading the object references, single-object requests (B) and negation (D), sit at <b>4%</b> and <b>0%</b>. The lenient metric scores D at 89% because the replayed trajectory happens to satisfy the goal checker. Category E (cross-task) gives the robot a different task's instruction in the same scene and serves as a positive control, described below.</figcaption>
+</figure>
+<table>
+<tr><th>Prompt category</th><th>Example</th><th class="num">Strict compliance (only the new propmt objects are moved)</th><th class="num">Lenient compliance (the original prompt objects are moved)</th></tr>
+<tr><td>A · reorder the mentions</td><td>"put the tomato sauce and the alphabet soup…"</td><td class="num">76%</td><td class="num">84%</td></tr>
+<tr><td><strong>B · single-object request</strong></td><td>"put the tomato sauce in the basket"</td><td class="num"><strong>4%</strong></td><td class="num">28%*</td></tr>
+<tr><td>C · explicit order</td><td>"first put the tomato sauce…, then…"</td><td class="num">53%</td><td class="num">72%</td></tr>
+<tr><td><strong>D · negation</strong></td><td>"…<em>not</em> the alphabet soup" / "the alphabet soup should <em>not</em> be moved…"</td><td class="num"><strong>0%</strong></td><td class="num">89%</td></tr>
+<tr><td>E · cross-task (control)</td><td>another task instruction from the same environment (a different task it had been finetuned on)</td><td class="num">64%</td><td class="num">0%</td></tr>
+</table>
+<p style="font-size:.85rem;color:var(--muted)">*The lower replay rate in B comes from fumbled replays, where the model drops an object. It still reaches for the wrong object first. Counting first contacts across the whole sweep, the model goes for the instructed object first in only 4 of 100 episodes.</p>
+<div class="demo-pair">
+  <figure>
+    <div class="vh">"put the alphabet soup in the basket"</div>
+    <video src="assets/videos/T0_alphabet_only_trial1.mp4" autoplay loop muted playsinline controls></video>
+  </figure>
+  <figure>
+    <div class="vh">"put the tomato sauce in the basket"</div>
+    <video src="assets/videos/T0_tomato_only_trial2.mp4" autoplay loop muted playsinline controls></video>
+  </figure>
+</div>
+<p style="font-size:.88rem;color:var(--muted);margin-top:-.8rem"><strong>Demo, replay in action.</strong> Same scene, two different prompts, one behavior. Whatever object the prompt names, the unmodified policy starts the same alphabet-soup-first routine it learned in training.</p>
+<p>
+The cross-task category (E) hands the robot another task's instruction in the same scene, and we include it as a positive control. If every category failed, we could not tell whether the model ignores language entirely or whether it specifically cannot edit a routine. The model switches tasks cleanly (replay rate 0) in the very same episodes where B and D fail almost completely. The failure is specific to changing details inside a routine, which is exactly the task-label picture from Finding 1. We repeated a smaller sweep on <strong>π<sub>0.5</sub></strong> (5 seeds) and saw the same pattern (instructed object first in 0 of 100 episodes), so a bigger model does not solve this on its own.
+</p>
+
+<!-- ================================================================ 5 -->
+<h2>5 · Finding 3 — Following the instruction into the network</h2>
+<h3>5.1 Where the attention goes</h3>
+<figure>
+  <img src="assets/figures/fig3_attention_anatomy.png" alt="Attention anatomy per layer">
+  <figcaption><strong>Figure 3.</strong> How the action expert's attention is divided at its final layer (mean over 5 prompts, including an unrelated prompt). About 55% goes to the action tokens attending to each other, ~30% to image tokens (12.8% of which lands on a single corner-patch sink), 14% to the BOS token (an "attention sink"), and <b>1.2% to the entire instruction</b> (≈1.4% on the in-task prompts, 0.5% when the prompt is unrelated). Across all 18 layers the instruction never receives more than 3.7%.</figcaption>
+</figure>
+<p>
+An <em>attention sink</em> is a token that soaks up a large share of attention without carrying task-relevant content. Sinks are well documented in language models <a href="#ref-stream">[4]</a>, are linked to unusually large hidden activations <a href="#ref-massive">[5]</a>, and have counterparts in vision transformers <a href="#ref-reg">[6]</a> and multimodal models <a href="#ref-var">[7]</a>. Recent analysis suggests models route attention to the sink when they have nothing useful to attend to <a href="#ref-outro">[8]</a>. That matches our data. The action expert learned during fine-tuning that the instruction tokens are unnecessary for reproducing the training trajectories, so their attention share collapsed and the sink absorbed it. In this view the sink is a side effect of the underlying shortcut, and removing the sink should not by itself restore language use. Section 6 tests this directly.
+</p>
+<h3>5.2 The action generator barely reacts to the prompt</h3>
+<p>
+π<sub>0</sub> generates actions with flow matching. The action expert outputs a velocity field that gradually transforms random noise into an action chunk, which gives us a clean measurement point, because we can compare the velocity fields produced under different prompts.
+</p>
+<figure>
+  <img src="assets/figures/fig4_velocity.png" alt="Velocity similarity across prompt pairs">
+  <figcaption><strong>Figure 4.</strong> Similarity of the velocity field between prompt pairs, measured on the 7 executed action dimensions. Even a completely unrelated instruction leaves the field 0.9943 similar to the original. Whatever the prompt says within a task, the computation that produces the motion barely moves. (Our midway version reported slightly higher values computed over all 32 output dimensions, 25 of which are padding that inflates the similarity.)</figcaption>
+</figure>
+<h3>5.3 The information is present for some instructions</h3>
+<p>
+One might wonder if maybe the instruction's content never reaches the action expert at all. We test that with linear
+probes, small classifiers trained to predict the prompt from a layer's hidden states, at every layer of both modules. A naive probe can score
+perfectly by memorizing which exact sentence it is looking at, so every number below comes from wordings the probe never saw in training (17 wordings × 10
+start states), checked against a permutation null.
+</p>
+<p>The probe asks one question for each of the two prompt types that fail in Finding 2.</p>
+<table>
+<tr><th></th><th>Single-object prompts (B)</th><th>Negation prompts (D)</th></tr>
+<tr><td>What the sentence requires</td><td>pick out the named object</td><td>treat the named object as off-limits</td></tr>
+<tr><td>What we test</td><td>can which object is named be read from the hidden states?</td><td>does the network group negation prompts by what they ask, or by which words they contain?</td></tr>
+<tr><td>Result</td><td>readable at every action-expert layer (AUC 0.89&ndash;0.96, all significant but weaker in the backbone, fading with depth)</td><td>grouped by meaning in <strong>0&ndash;3%</strong> of cases, at every layer of both modules</td></tr>
+<tr><td>Verdict</td><td>information present but unused</td><td>information is not present</td></tr>
+</table>
+<p>
+The negation test works by transfer. A prompt like "put the alphabet soup in
+the basket, do not touch the tomato sauce" mentions both objects but singles
+out the tomato. We train the probe only on unambiguous prompts (tomato-only
+versus both-objects wordings, no negation anywhere), freeze it, and show it the
+negation prompts. If the network represents what the sentence asks, these
+prompts land with the tomato-singling group. If it represents only which words
+appear, they land with the both-objects group because both objects are named
+in the sentence. They land with the both-objects group at every layer, and
+deeper layers are more confident about it.
+</p>
+<figure>
+  <img src="assets/figures/fig5_probe.png" alt="Probe results, both towers">
+  <figcaption><strong>Figure 5.</strong> <em>Left:</em> the named object is readable from every action-expert layer on held-out wordings. <em>Right:</em> the transfer test. Negation prompts are grouped by meaning in 0&ndash;3% of cases everywhere. The network files them by their words.</figcaption>
+</figure>
+<p>
+For single-object prompts, the network knows which object was named and ignores it,
+which means an intervention has something to amplify, and Section 6 tries
+exactly that. For negation, nothing anywhere in the network represents "leave
+the tomato alone", so there is nothing for any test-time fix to find.
+</p>
+
+<!-- ================================================================ 6 -->
+<h2>6 · Trying to fix the issue</h2>
+<p>
+If the object information is sitting unused inside the network, can we force the model to use it without retraining? Several recent papers propose training-free fixes of exactly this kind, for example attention recalibration <a href="#ref-igar">[9]</a>, which steers attention to make a VLA model not act when given an impossible prompt (i.e. steering forces the model to not pick up a "white" object but there are only "black" objects when prompted to pick up a "white" object). We tested four interventions, and the three that only touch inference share one pattern. A weak intervention gets absorbed and the original action trajectory continues, while a strong one breaks the policy before the behavior ever changes. The fourth attempt adds new training data through small adapters and is the only one that seems to work slightly.
+</p>
+<table>
+<tr><th>Attempt</th><th>What we did</th><th>What success would look like</th><th>What happened</th></tr>
+<tr><td>1 · Sampler noise</td><td>Replace the deterministic sampler with a stochastic one (strength η) and resample many times</td><td>Alternative behaviors occasionally appear among the samples</td><td><span class="bad">✗</span> rollouts from one start collapse to a single outcome (1.08 clusters on average), and high noise breaks the policy (48% success at η = 0.6)</td></tr>
+<tr><td>2 · Forced attention</td><td>Suppress the attention sink and force the attention onto the instruction tokens</td><td>Looking at the instruction makes the action depend on it</td><td><span class="bad">✗</span> instruction attention moves (1.7% → 95%) but performance stays at 0, and strong forcing breaks the policy (13/15 → 0/15 success)</td></tr>
+<tr><td>3 · Hidden-state steering</td><td>Add a "tomato minus alphabet soup" direction to the hidden states (strength α)</td><td>The robot reaches for the tomato first</td><td><span class="bad">✗</span> the velocity shifts as intended while a random placebo does nothing, yet performance statys at 0 and the policy collapses at high α</td></tr>
+<tr><td>4 · LoRA fine-tuning</td><td>Adapter training, including counterfactual single-object data and a sink mask</td><td>Compliance on single-object prompts</td><td><span class="ok">△</span> partial. First reach improves 0% → 40% with counterfactual data (p = 0.017 vs plain LoRA, uncorrected) and demo episodes complete the request. The sink mask adds nothing significant (p = 0.215)</td></tr>
+</table>
+
+<h3>6.1 · Attempt 1 — Sampler noise</h3>
+<p>
+This project originally began as a study of stochastic sampling in flow-matching policies. π<sub>0</sub> normally maps noise to actions deterministically. A stochastic (SDE) sampler re-injects fresh noise at every step, so repeated rollouts from the same start to genuinely differ. If alternative behaviors existed, resampling should occasionally surface one. It never does. Across five LIBERO tasks (200 episodes per η), successful rollouts from one start form <strong>1.08</strong> outcome clusters on average, and 92% of starts give exactly one. Moderate noise is absorbed (96% and 92% success vs 84% baseline) and strong noise breaks the policy (48% at η = 0.6). A guided variant with outcome selection helped to increase the success rate for the original task but did not help achieve different modes of action distributions (i.e. the model still picked up the same object first every single time). The randomness explored within what the policy already does and has seen before.
+</p>
+
+<h3>6.2 · Attempt 2 — Forced attention</h3>
+<p>
+Perhaps the model fails because it didn't focus on the instruction, so making it look should help. That is the logic of training-free attention recalibration <a href="#ref-igar">[9]</a>. Suppressing the sink frees up its 14% of the attention budget, but none of it directly flows to the instruction. Yet, forcing the final-layer attention onto the instruction changes the output drastically. When only a moderate attention forcing is applied, the behavior remains unchanged (the robot still reaches for the soup instead of the tomato sauce) and a strong boost destroys the policy outright (success 13/15 → 0/15, first contacts scattering across random objects). Making the model attend more to the instruction does not inherently make it understand language better.
+</p>
+
+<h3>6.3 · Attempt 3 — Hidden-state steering</h3>
+<p>
+Next we inject the content ourselves. The steering direction is the difference between the expert's hidden states under a tomato prompt and an alphabet-soup prompt, added at one layer with strength α while the model receives an ambiguous prompt. A random direction of the same size serves as a placebo. This shifts the velocity field smoothly toward the named object while the placebo does nothing. Yet, the behavior still never flips at moderate steering and breaks the policy at higher steering. While we could move the representation toward "tomato", it could not make the robot do tomato. This is most likely because no tomato-first behavior was ever learned.
+</p>
+<figure>
+  <img src="assets/figures/fig6_steering.png" alt="Steering dose response">
+  <figcaption><strong>Figure 6.</strong> <em>Left:</em> the velocity field shifts smoothly and in the correct direction as α grows, while the same-size random placebo does nothing. <em>Right:</em> at every strength where the policy still functions, 0/8 episodes go for the instructed object. In the shaded region the policy breaks down before the behavior changes.</figcaption>
+</figure>
+
+<h3>6.4 · Attempt 4 — LoRA fine-tuning with counterfactual data</h3>
+<p>
+The strongest attempt changes the weights. We trained LoRA adapters in several variants, including one on counterfactual single-object demonstrations and one that also masks the sink token during training. The first reach toward the commanded object rises from 0% (plain LoRA) to 13% (with counterfactual data) to 40% (counterfactual data plus sink mask), and the demo below shows the full variant actually completing the tomato-only request, something the unmodified policy never does. The improvement over plain LoRA is significant before multiple-comparison correction but the sink mask's extra contribution is not, so the data is doing the work, not the mask.
+</p>
+<figure>
+  <img src="assets/figures/fig7_lora.png" alt="LoRA ablation">
+  <figcaption><strong>Figure 7.</strong> LoRA variants, 15 rollouts per prompt with 95% confidence intervals. Red bars show how often the robot reaches for the tomato first when told to handle only the tomato. Grey bars show the original two-object behavior is preserved. Counterfactual data drives the improvement.</figcaption>
+</figure>
+<div class="demo-pair">
+  <figure>
+    <div class="vh bad">✗ Before: unmodified policy, told "tomato only"</div>
+    <video src="assets/videos/T0_tomato_only_trial2.mp4" autoplay loop muted playsinline controls></video>
+    <figcaption>The behavior every attempt tries to fix. The policy heads for the alphabet soup and runs its trained two-object routine.</figcaption>
+  </figure>
+  <figure>
+    <div class="vh ok">✓ After: + counterfactual LoRA, told "tomato only"</div>
+    <video src="assets/videos/lora_tomato_only_trial1.mp4" autoplay loop muted playsinline controls></video>
+    <figcaption>The full variant picks up the tomato sauce and completes the request. New training data did what no inference-time intervention could. The gripper spazzes out near the end because there is no goal completed stop clause applied. This is to ensure that the model isn't stopping at the tomato sauce just because of a end condition but rather it learns to never reach for both.</figcaption>
+  </figure>
+</div>
+<p>
+Our interpretation on the failures of these interventions is that Imitation learning on LIBERO never required to "move only the tomato" or "avoid the tomato", so the policy does not contain those behaviors. Test-time methods can re-weight behaviors a policy already has, which may be why they show gains on increasing the success rate on the benchmark, yet they cannot create a behavior that was never learned. That is why the first three approaches moved their intended quantities (sampling spread, attention, hidden states) yet compliance stayed flat, and why the only variant that helped is the one that taught the policy a new behavior. However, the fine-tuning approach also comes with issues such as catastrophic forgetting and overfitting on minimal data.
+</p>
+
+<!-- ================================================================ 7 -->
+<h2>7 · Did fine-tuning destroy language understanding?</h2>
+<p>
+The base model gives us a way to ask. On LIBERO observations, π<sub>0</sub>-base responds barely more to prompt changes than to its own sampling noise (1.3–1.5× over a noise floor 4× larger than the fine-tuned model's, Figure 1 right). The crisp prompt sensitivity we measured was created by fine-tuning, and it is exactly as narrow as the training data required. Plain LoRA on one task's demonstrations scored 12/15 there and 0/15 on every other prompt we tested, while adding counterfactual demonstrations bought part of the interface back (Figure 7). Fine-tuning on narrow data narrows the language interface to what the data requires. We found no strong evidence the base model ever had these abilities to lose. π<sub>0.5</sub> insulates its backbone from action gradients <a href="#ref-ki">[12]</a> and yet bypasses language the same way (0/100 on our sweep), and our probe shows the backbone-side representation carries object mentions that the expert already receives and ignores. The data and fine-tuning, not the backbone weights, decides whether the sentence matters.
+</p>
+
+<!-- ================================================================ 8 -->
+<h2>8 · Conclusion</h2>
+<p>
+π<sub>0</sub> treats the instruction like the query label in its key of memorized behaviors. Matching the title works well. It survives rewording, it is required for the task to start, and it visibly changes the model's actions. But nothing downstream reads the sentence any further. The expert spends ~1.4% of its attention on it, the velocity field stays nearly identical across prompts, compliance on detail-following prompts is 0–4%, and every inference-time fix failed because the requested behavior was never learned in the first place. Behavior moved only when we trained a new behavior in.
+<p>
+<p>
+Our takeaway is that fine-grained language control in VLAs most likely has to be fixed at training time, with data following the sentence is necessary to imitate the demonstration. Our LoRA experiment shows even a small dose of such data starts to work at the cost of overfitting and catastrophic forgetting, so collecting and scaling that data properly is the open problem. Additionally, more complex methods could be applied such as adding a loss function to force the model to attend to instruction tokens better or a knowledge insulation method applied to the finetuning as well could potentially improve the model's generalization.
+</p>
+
+<!-- ================================================================ 9 -->
+<h2>9 · What is new here</h2>
+<ul>
+  <li>A sharper version of the "VLAs ignore language" claim.</li>
+  <li>Various probes to study the language instruction effects on the VLA model. Object choice is present but unused, negation is never computed.</li>
+  <li>Three controlled negative inference-time results plus a counterfactual-data trend on a flow-matching VLA, which give a concrete reason to expect training-free grounding fixes to plateau.</li>
+  <li>A base-vs-fine-tuned comparison showing fine-tuning created the prompt sensitivity and made it narrow.</li>
+</ul>
+
+<!-- ================================================================ 10 -->
+<h2>10 · Limitations</h2>
+<ul>
+  <li>The fine-grained claims rest on one two-object task family (15 seeds × 20 prompts on π<sub>0</sub>, 5 seeds on π<sub>0.5</sub>). The task-label results cover 20 tasks across 2 suites. Everything is in simulation.</li>
+  <li>The LoRA runs used openpi's standard adapter configuration for 3,000 steps on single-task data. Heavier counterfactual training might still succeed.</li>
+</ul>
+
+<!-- ================================================================ REFS -->
+<h2>References</h2>
+<ol class="refs">
+  <li id="ref-pi0">Black et al., <em>π0: A Vision-Language-Action Flow Model for General Robot Control</em>, 2024. <a href="https://arxiv.org/abs/2410.24164">arXiv:2410.24164</a></li>
+  <li id="ref-plus">LIBERO-Plus: <a href="https://arxiv.org/abs/2510.13626">arXiv:2510.13626</a></li>
+  <li id="ref-pro">LIBERO-Pro: <a href="https://arxiv.org/abs/2510.03827">arXiv:2510.03827</a></li>
+  <li id="ref-stream">Xiao et al., <em>Efficient Streaming Language Models with Attention Sinks</em>. <a href="https://arxiv.org/abs/2309.17453">arXiv:2309.17453</a></li>
+  <li id="ref-massive">Sun et al., <em>Massive Activations in Large Language Models</em>. <a href="https://arxiv.org/abs/2402.17762">arXiv:2402.17762</a></li>
+  <li id="ref-reg">Darcet et al., <em>Vision Transformers Need Registers</em>. <a href="https://arxiv.org/abs/2309.16588">arXiv:2309.16588</a></li>
+  <li id="ref-var">Kang et al., <em>Visual Attention Redistribution (VAR) / visual sinks in multimodal models</em>. <a href="https://arxiv.org/abs/2503.03321">arXiv:2503.03321</a></li>
+  <li id="ref-outro">Attention sinks as a learned global bias / OutRo. <a href="https://arxiv.org/abs/2603.14337">arXiv:2603.14337</a></li>
+  <li id="ref-igar">IGAR: training-free instruction-grounded attention recalibration for VLAs. <a href="https://arxiv.org/abs/2603.06001">arXiv:2603.06001</a></li>
+  <li id="ref-gu">Gu et al., <em>When Attention Sink Emerges in Language Models: An Empirical View</em>, ICLR 2025. <a href="https://arxiv.org/abs/2410.10781">arXiv:2410.10781</a></li>
+  <li id="ref-ki">Driess et al., <em>Knowledge Insulating Vision-Language-Action Models</em>, 2025. <a href="https://arxiv.org/abs/2505.23705">arXiv:2505.23705</a></li>
+  <li>Physical Intelligence, <em>π0.5: a Vision-Language-Action Model with Open-World Generalization</em>, 2025. <a href="https://arxiv.org/abs/2504.16054">arXiv:2504.16054</a></li>
+  <li>LIBERO benchmark: Liu et al. <a href="https://arxiv.org/abs/2306.03310">arXiv:2306.03310</a></li>
+</ol>
+
+</main>
+</body>
+</html>
